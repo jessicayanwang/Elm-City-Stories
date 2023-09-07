@@ -1,0 +1,192 @@
+---
+title: "Elm City Stories"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Set Library
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(base)
+library(lme4)
+library(jtools)
+```
+
+
+## Manipulate the data
+```{r}
+# Read in the logs.csv file
+mydata <- read_csv("logs.csv",guess_max=2106600)
+
+# Choose the useful Columns
+log_data <- select(mydata, c("player_id","school","event_id","event_description","event_category","event_time",
+                             "event_time_dbl","stack_id","stack_title","skill_id","skill_level_know",
+                             "skill_level_people","skill_level_priority","skill_level_refusal",
+                             "skill_level_me","old_skill_point","new_skill_point","avatar_age",
+                             "avatar_gender","avatar_id"))
+
+# Save the new data set log_data
+log_data %>% write_csv("log_data.csv")
+
+# Read in the new data set again
+log_data <- read_csv("log_data.csv",guess_max=2106600)
+```
+
+
+## Getting the mean score reduction (week 0 and week 6) 
+```{r}
+s5 <- read_csv("S5_scores_cleaned.csv")
+
+# Get the mean score in week 0 and week 6
+week0 <- s5 %>% filter(weeks == 0)
+week6 <- s5 %>% filter(weeks == 6)
+
+# Get the new data set with week 0 and week 6 mean score
+s5new <- merge(week0, week6, by="player_id")
+s5new$diff = s5new$S5_mean.x - s5new$S5_mean.y
+s5new = select(s5new, c("player_id", "diff"))
+
+# Add the mean score into the log_data
+data_comb <- merge(x=s5new, y=log_data, by="player_id", all.x=TRUE)
+```
+
+
+## Avatar Information
+```{r}
+# Choose the event_id = 602 for finding avatar gender and age
+avtar_age_gender_info = log_data %>% filter(event_id == 602)
+# Choose the event_id = 604 for avatar race
+avatar_race_info = log_data %>% filter(event_id == 604)
+
+# Age percentage
+avatar_age= select(avtar_age_gender_info, avatar_age) %>% group_by(avatar_age) %>% count()
+
+age_percentage = avatar_age$n / sum(avatar_age$n)
+
+age_table = cbind(avatar_age$avatar_age, round(age_percentage*100,2))
+
+# Gender percentage
+avatar_gender= select(avtar_age_gender_info, avatar_gender) %>% group_by(avatar_gender) %>% count()
+
+gender_percentage = avatar_gender$n / sum(avatar_gender$n)
+
+gender_table = cbind(avatar_gender$avatar_gender, round(gender_percentage*100,2))
+
+# Race percentage
+avatar_id = select(avatar_race_info, avatar_id) %>% group_by(avatar_id) %>% count()
+
+race_percentage = avatar_id$n / sum(avatar_id$n)
+
+race_table = cbind(avatar_id$avatar_id, round(race_percentage*100,2))
+```
+
+
+## Linear Mixed Model: The Relationship between Avatar Infomation and the Reduction in Mean Score
+```{r}
+# Choose the event_id = 602 for finding avatar gender and age
+avatar_age_gender = data_comb %>% filter(event_id == 602)
+# Choose the event_id = 604 for avatar race
+avatar_race = data_comb %>% filter(event_id == 604)
+
+# Find relationship between gender and reduction in mean score
+model1 <- lmer(diff~ avatar_gender + (1|school), data = avatar_age_gender)
+model2 <- lmer(diff ~ avatar_gender + (1+avatar_gender|school), data = avatar_age_gender)
+
+# p-value > 0.05 - choose simple model
+lmtest::lrtest(model1, model2)
+# Summary of model 1
+summary(model1)
+# Plot
+effect_plot(model1, pred = avatar_gender, colors = "dark blue", x.label = "Avatar Gender", y.label = "Reduction in Mean Score (W0 to W6)", main.title = "The relationship between avatar gender and reduction in mean score") + theme(panel.grid = element_blank())
+
+# Find relationship between race and reduction in mean score
+model3 = lmer(diff ~ avatar_id + (1|school), data = avatar_race)
+model4 = lmer(diff ~ avatar_id + (1+ avatar_id|school), data = avatar_race)
+
+# p-value > 0.05 - choose simple model
+lmtest::lrtest(model3, model4)
+# Summary of model 3
+summary(model3)
+# Plot
+effect_plot(model3, pred = avatar_id, colors = "dark blue", x.label = "Avatar Ethnicity", y.label = "Reduction in Mean Score (W0 to W6)", main.title = "The relationship between avatar ethnicity and reduction in mean score") + theme(panel.grid = element_blank())
+
+# Find relationship between age and reduction in mean score
+model5 = lmer(diff ~ avatar_age + (1|school), data = avatar_age_gender)
+model6 = lmer(diff ~ avatar_age + (1+avatar_age|school), data = avatar_age_gender)
+
+# p-value > 0.05 - choose simple model
+lmtest::lrtest(model5, model6)
+# Summary of model 5
+summary(model5)
+# Plot
+effect_plot(model5, pred = avatar_age, x.label = "Avatar Age (11-14)", y.label = "Reduction in Mean Score (W0 to W6)", main.title = "The relationship between avatar age and reduction in mean score", colors = "Dark Blue") + theme(panel.grid = element_blank())
+```
+
+
+## Time Spend on Stack V.S.Reduction in Mean Score
+```{r}
+#calculate total time each player spent on each stack
+stacks <-data_comb %>% distinct(player_id, .keep_all = TRUE) %>% select(player_id) %>% add_column(stack0 = 0, stack1 = 0,stack2 = 0, stack3 = 0,
+stack4 = 0,stack5 = 0,stack6 = 0,stack7 = 0,stack8 = 0,
+stack9 = 0,stack10 = 0,stack11 = 0,stack12 = 0) %>% drop_na(player_id)
+row.names(stacks) <- stacks$player_id
+
+ordered <- data_comb[order(data_comb$player_id, data_comb$event_time_dbl),]
+i <- 2
+while (i <= nrow(ordered)){
+  print(i)
+  if (!(is.na(ordered$stack_id[i]))){
+    time = ordered$event_time_dbl[i] - ordered$event_time_dbl[i-1]
+    row = as.character(ordered$player_id[i])
+    column = as.character(paste("stack", as.character(ordered$stack_id[i]), sep=""))
+    stacks[row, column] = stacks[row, column]+ time
+  }
+  i = i+1
+}
+
+# Combine stacks and s5new
+stacks_comb <- merge(stacks, s5new)
+
+#Plot time spent on each stack vs. reduction in mean score
+#stack1
+stack1 <- stacks_comb %>% filter(stack1 > 0 & stack1 < 20000)
+ggplot(stack1, aes(x=stack1, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack2
+stack2 <- stacks_comb %>% filter(stack2 > 0 & stack2 < 20000)
+ggplot(stack2, aes(x=stack2, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack3
+stack3 <- stacks_comb %>% filter(stack3 > 0)
+ggplot(stack3, aes(x=stack3, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack4
+stack4 <- stacks_comb %>% filter(stack4 > 0 & stack4 < 4000)
+ggplot(stack4, aes(x=stack4, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack5
+stack5 <- stacks_comb %>% filter(stack5 > 0 & stack5 < 20000)
+ggplot(stack5, aes(x=stack5, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack6
+stack6 <- stacks_comb %>% filter(stack6 > 0 & stack6< 10000)
+ggplot(stack6, aes(x=stack6, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack7
+stack7 <- stacks_comb %>% filter(stack7 > 0)
+ggplot(stack7, aes(x=stack7, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack8
+stack8 <- stacks_comb %>% filter(stack8 > 0 & stack8 < 1000)
+ggplot(stack8, aes(x=stack8, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack9
+stack9 <- stacks_comb %>% filter(stack9 > 0)
+ggplot(stack9, aes(x=stack9, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack10
+stack10 <- stacks_comb %>% filter(stack10 > 0)
+ggplot(stack10, aes(x=stack10, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack11
+stack11 <- stacks_comb %>% filter(stack11 > 0)
+ggplot(stack11, aes(x=stack11, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+#stack12
+stack12 <- stacks_comb %>% filter(stack12 > 0)
+ggplot(stack12, aes(x=stack12, y=diff)) + geom_point() + geom_smooth(method = "lm", se = FALSE)
+```
